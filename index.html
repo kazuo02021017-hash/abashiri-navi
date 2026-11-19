@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>網走湖 漁場ナビ</title>
+<style>
+:root{--ink:#14202b;--paper:#fff;--bar:#14202b;--bar-fg:#f4f7fa;--me:#0a84ff;--cal:#e8590c;--warn:#ffd43b;--muted:#9fb0bf}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font:16px/1.4 -apple-system,"Hiragino Sans",sans-serif;-webkit-user-select:none;user-select:none}
+#view{position:fixed;inset:0;touch-action:none;background:#e9eef2}
+#stage{position:absolute;left:0;top:0;transform-origin:0 0}
+#stage img,#stage svg{position:absolute;left:0;top:0;display:block}
+header,footer{position:fixed;left:0;right:0;z-index:2;background:var(--bar);color:var(--bar-fg);padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+header{top:0;padding-top:calc(8px + env(safe-area-inset-top));padding-bottom:8px}
+footer{bottom:0;padding-top:8px;padding-bottom:calc(8px + env(safe-area-inset-bottom));display:flex;gap:8px}
+#zone{font-size:26px;font-weight:800;letter-spacing:.02em}
+#sub{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+#sub.bad{color:var(--warn)}
+button{flex:1;font:inherit;font-weight:700;padding:12px 6px;border-radius:10px;border:0;background:#2b3c4c;color:var(--bar-fg)}
+button.on{background:var(--cal)}
+button:focus-visible{outline:3px solid var(--warn)}
+#cal{position:fixed;left:0;right:0;z-index:2;bottom:calc(64px + env(safe-area-inset-bottom));background:#fff7f0;border-top:3px solid var(--cal);padding:10px max(12px,env(safe-area-inset-left));font-size:14px}
+#cal b{color:var(--cal)}
+#cal ol{margin:6px 0;padding-left:1.4em;max-height:96px;overflow:auto;font-variant-numeric:tabular-nums}
+#cal li button{flex:none;padding:2px 8px;font-size:12px;background:#ddd;color:var(--ink);margin-left:6px}
+#cal .row{display:flex;gap:8px}
+#cal .row button{background:#ddd;color:var(--ink);padding:8px}
+#toast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;background:rgba(20,32,43,.92);color:#fff;padding:12px 18px;border-radius:12px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="view"><div id="stage">
+  <img id="map" src="map.jpg" width="1702" height="1206" alt="網走湖の漁場の地図">
+  <svg id="ov" width="1702" height="1206" viewBox="0 0 1702 1206">
+    <polyline id="trail" fill="none" stroke="#0a84ff" stroke-width="3" stroke-opacity=".5" points=""/>
+    <g id="calpts"></g>
+    <circle id="hl" r="34" fill="#ffd43b" fill-opacity=".35" stroke="#e8a400" stroke-width="3" hidden/>
+    <circle id="acc" fill="#0a84ff" fill-opacity=".15" stroke="#0a84ff" stroke-opacity=".5" hidden/>
+    <circle id="me" r="10" fill="#0a84ff" stroke="#fff" stroke-width="4" hidden/>
+  </svg>
+</div></div>
+
+<header><div id="zone">位置を探しています…</div><div id="sub">GPS を待っています</div></header>
+
+<section id="cal" hidden>
+  <div><b>位置合わせ</b>：いま自分がいる所を、地図の上でタップしてください。離れた所で2〜3か所やると正確になります。</div>
+  <ol id="calList"></ol>
+  <div class="row"><button id="calClear" type="button">全部消す</button><button id="calCopy" type="button">合わせた点をコピー</button></div>
+</section>
+
+<footer>
+  <button id="btnMe" type="button">現在地へ</button>
+  <button id="btnCal" type="button">位置合わせ</button>
+</footer>
+<div id="toast" hidden></div>
+
+<script>
+// 地図上の場所の名前（画像の画素の位置・目で読み取り）
+const ZONES = [
+  ["オトシバ",42,250,215],["シンバ",44,410,225],["鈴木の前",45,500,265],["フカダの先",46,590,315],
+  ["フカダ",49,760,320],["山本",50,875,325],["タンジ",1,940,350],["ドバ",2,1010,330],
+  ["嘉多山ワンド",41,130,310],["センゴク",40,250,345],["嘉多山ヨシ先",39,380,330],["ダイナン",39,430,385],
+  ["大ワンコ",37,240,500],["カワシリ",35,240,620],["カガワ",31,330,720],["カガワの澪",30,430,765],
+  ["山下の下",29,470,670],["山下",28,560,640],["大上",27,640,665],["エビトリ",26,700,720],
+  ["イナリさん",24,710,795],["漁港の上手",22,820,790],["漁港の下手",20,950,745],["大ワンド",18,1040,680],
+  ["イシカラ",17,1140,635],["イシカラの澪",16,1170,740],["ヨシの先",15,1280,665],["トロワラ",14,1330,715],
+  ["半島",13,1365,810],["ボート岬",13,1300,860],["河口",12,1460,810],["シロダイ",10,1450,725],
+  ["ジャカゴ",9,1400,610],["スミガマ",7,1350,470],["ハンヌキ",33,230,775],["アキアジ湾","33B",150,840],
+  ["キャンプ場",34,90,810],["家の前","34B",40,760],
+  ["除外",null,1200,330],["除外",null,1150,460],["除外",null,1100,560]
+];
+const $ = id => document.getElementById(id);
+const view = $("view"), stage = $("stage");
+let s = 1, tx = 0, ty = 0, follow = true, fix = null, trail = [], calMode = false;
+let cal = []; try { cal = JSON.parse(localStorage.getItem("cal") || "[]"); } catch {}
+const save = () => { try { localStorage.setItem("cal", JSON.stringify(cal)); } catch {} };
+
+// --- 表示（拡大・移動） ---
+const apply = () => stage.style.transform = `translate(${tx}px,${ty}px) scale(${s})`;
+function fit() { s = Math.min(innerWidth / 1702, innerHeight / 1206) ; tx = (innerWidth - 1702 * s) / 2; ty = (innerHeight - 1206 * s) / 2; apply(); }
+function zoomAt(f, cx, cy) { const n = Math.min(6, Math.max(0.2, s * f)); tx = cx - (cx - tx) * n / s; ty = cy - (cy - ty) * n / s; s = n; apply(); }
+const toImg = (cx, cy) => [(cx - tx) / s, (cy - ty) / s];
+function centerOn(x, y) { s = Math.max(s, 0.9); tx = innerWidth / 2 - x * s; ty = innerHeight / 2 - y * s; apply(); }
+
+const ptrs = new Map(); let down = null, pinch = null;
+view.addEventListener("pointerdown", e => {
+  view.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if (ptrs.size === 1) down = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); down = null; }
+});
+view.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const [px, py] = ptrs.get(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+  if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    zoomAt(d / pinch, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); pinch = d; follow = false;
+  } else { tx += e.clientX - px; ty += e.clientY - py; apply();
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8) { down.moved = true; follow = false; } }
+});
+const up = e => {
+  ptrs.delete(e.pointerId);
+  if (down && !down.moved && Date.now() - down.t < 500 && ptrs.size === 0) tap(...toImg(e.clientX, e.clientY));
+  if (ptrs.size < 2) pinch = null; if (!ptrs.size) down = null;
+};
+view.addEventListener("pointerup", up); view.addEventListener("pointercancel", up);
+view.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY); }, { passive: false });
+
+// --- 緯度経度 → 地図の画素（合わせた点から計算） ---
+const LAT0 = 43.97, LON0 = 144.16;
+const meters = (lat, lon) => [(lon - LON0) * Math.cos(LAT0 * Math.PI / 180) * 111320, (lat - LAT0) * 110540];
+function solve3(A, b) { // 3x3 の連立方程式
+  const m = A.map((r, i) => [...r, b[i]]);
+  for (let i = 0; i < 3; i++) { let p = i; for (let k = i + 1; k < 3; k++) if (Math.abs(m[k][i]) > Math.abs(m[p][i])) p = k;
+    [m[i], m[p]] = [m[p], m[i]]; for (let k = 0; k < 3; k++) if (k !== i) { const f = m[k][i] / m[i][i]; for (let j = i; j < 4; j++) m[k][j] -= f * m[i][j]; } }
+  return m.map((r, i) => r[3] / r[i]);
+}
+function model() {
+  if (cal.length < 2) return null;
+  const P = cal.map(c => [...meters(c.lat, c.lon), c.x, c.y]);
+  if (cal.length === 2) { // 回転・拡大・移動だけ（北を上に、y は下向き）
+    const [[e1, n1, x1, y1], [e2, n2, x2, y2]] = P, we = e2 - e1, wn = -(n2 - n1), zx = x2 - x1, zy = y2 - y1, d = we * we + wn * wn;
+    if (d < 25) return null;
+    const ar = (zx * we + zy * wn) / d, ai = (zy * we - zx * wn) / d;
+    return { f: (e, n) => [x1 + ar * (e - e1) - ai * (-(n - n1)), y1 + ai * (e - e1) + ar * (-(n - n1))], ppm: Math.hypot(ar, ai) };
+  }
+  const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], bx = [0, 0, 0], by = [0, 0, 0];
+  for (const [e, n, x, y] of P) { const v = [e, n, 1]; for (let i = 0; i < 3; i++) { bx[i] += v[i] * x; by[i] += v[i] * y; for (let j = 0; j < 3; j++) A[i][j] += v[i] * v[j]; } }
+  const p = solve3(A, bx), q = solve3(A, by);
+  if (p.some(isNaN) || q.some(isNaN)) return null;
+  return { f: (e, n) => [p[0] * e + p[1] * n + p[2], q[0] * e + q[1] * n + q[2]], ppm: Math.sqrt(Math.abs(p[0] * q[1] - p[1] * q[0])) };
+}
+let M = model();
+
+// --- 画面の更新 ---
+const show = (el, on) => el.toggleAttribute("hidden", !on);
+function toast(t) { $("toast").textContent = t; show($("toast"), true); clearTimeout(toast.t); toast.t = setTimeout(() => show($("toast"), false), 1800); }
+function render() {
+  const sub = $("sub");
+  if (!fix) return;
+  const acc = Math.round(fix.accuracy);
+  if (!M) { $("zone").textContent = "位置合わせが必要です"; sub.textContent = `GPS ±${acc}m ・下の「位置合わせ」から2か所以上`; sub.className = "bad"; return; }
+  const [x, y] = M.f(...meters(fix.lat, fix.lon));
+  let best = null, bd = 1e9; for (const z of ZONES) { const d = Math.hypot(z[2] - x, z[3] - y); if (d < bd) { bd = d; best = z; } }
+  const far = bd / M.ppm > 600 || x < 0 || y < 0 || x > 1702 || y > 1206;
+  $("zone").textContent = far ? "地図の外です" : best[1] === null ? "⚠ 除外の区域の近く" : `${best[0]}（${best[1]}）`;
+  sub.textContent = `GPS ±${acc}m ・合わせた点 ${cal.length}か所` + (acc > 30 ? " ・GPSが不安定" : "");
+  sub.className = acc > 30 ? "bad" : "";
+  for (const [k, v] of [["cx", x], ["cy", y]]) { $("me").setAttribute(k, v); $("acc").setAttribute(k, v); }
+  $("acc").setAttribute("r", Math.max(10, fix.accuracy * M.ppm)); show($("me"), true); show($("acc"), true);
+  const hl = $("hl"); if (!far && best[1] !== null) { hl.setAttribute("cx", best[2]); hl.setAttribute("cy", best[3]); show(hl, true); } else show(hl, false);
+  $("trail").setAttribute("points", trail.map(([la, lo]) => M.f(...meters(la, lo)).join(",")).join(" "));
+  if (follow) centerOn(x, y);
+}
+function renderCal() {
+  $("calpts").innerHTML = cal.map((c, i) => `<circle cx="${c.x}" cy="${c.y}" r="9" fill="#e8590c" stroke="#fff" stroke-width="3"/><text x="${c.x + 12}" y="${c.y - 10}" font-size="22" font-weight="800" fill="#e8590c" stroke="#fff" stroke-width="4" paint-order="stroke">${i + 1}</text>`).join("");
+  $("calList").innerHTML = cal.map((c, i) => `<li>${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}（±${Math.round(c.acc)}m）<button type="button" data-i="${i}">消す</button></li>`).join("") || "<li>まだありません</li>";
+}
+$("calList").addEventListener("click", e => { const i = e.target.dataset.i; if (i == null) return; cal.splice(+i, 1); changed(); });
+function changed() { save(); M = model(); renderCal(); render(); }
+
+function tap(x, y) {
+  if (!calMode) return;
+  if (!fix) return toast("GPS を待っています");
+  if (fix.accuracy > 30) toast(`GPS が不安定（±${Math.round(fix.accuracy)}m）。少し待つと正確になります`);
+  cal.push({ x: Math.round(x), y: Math.round(y), lat: fix.lat, lon: fix.lon, acc: fix.accuracy }); changed();
+  if (fix.accuracy <= 30) toast(`${cal.length}か所目を記録しました`);
+}
+
+$("btnMe").onclick = () => { follow = true; if (fix && M) render(); else toast(M ? "GPS を待っています" : "先に位置合わせをしてください"); };
+$("btnCal").onclick = () => { calMode = !calMode; $("btnCal").classList.toggle("on", calMode); $("btnCal").textContent = calMode ? "合わせ終わり" : "位置合わせ"; show($("cal"), calMode); if (calMode) follow = false; };
+$("calClear").onclick = () => { if ($("calClear").dataset.sure) { cal = []; changed(); delete $("calClear").dataset.sure; $("calClear").textContent = "全部消す"; } else { $("calClear").dataset.sure = 1; $("calClear").textContent = "もう一度押すと消えます"; } };
+$("calCopy").onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(cal)); toast("コピーしました。チャットに貼ってください"); } catch { toast("コピーできませんでした"); } };
+
+// --- GPS ---
+if (!navigator.geolocation) $("zone").textContent = "この端末では位置情報が使えません";
+else navigator.geolocation.watchPosition(p => {
+  fix = { lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy };
+  const last = trail[trail.length - 1];
+  if (fix.accuracy <= 30 && (!last || Math.hypot(...meters(...last).map((v, i) => v - meters(fix.lat, fix.lon)[i])) > 5)) trail = [...trail.slice(-1500), [fix.lat, fix.lon]];
+  render();
+}, err => { $("zone").textContent = "位置情報が使えません"; $("sub").textContent = err.code === 1 ? "設定 → プライバシー → 位置情報サービス → Safari を「使用中のみ」に" : "電波の良い所で開き直してください"; $("sub").className = "bad"; },
+{ enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+
+// 画面を消さない
+const wake = () => navigator.wakeLock?.request("screen").catch(() => {});
+wake(); document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && wake());
+
+addEventListener("resize", fit); fit(); renderCal();
+</script>
+</body>
+</html>
